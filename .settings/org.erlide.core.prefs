@@ -1,0 +1,13 @@
+#Wed Mar 25 18:24:54 EDT 2009
+backend_cookie=
+backend_name=
+backend_node=erlide
+eclipse.preferences.version=1
+external_includes=
+external_modules=
+include_dirs=include
+make_unique=true
+output_dir=ebin
+source_dirs=src
+type=NORMAL
+use_pathz=true
