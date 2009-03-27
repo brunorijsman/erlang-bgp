@@ -93,24 +93,77 @@ code_change(_OldVersion, State, _Extra) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
+%% TODO: All of these throw_... functions should take in an additional string argument which contains a very detailed
+%% description of the problem and where it happened for logging purposes. 
+
+throw_decode_error(Code, SubCode, Data) ->
+    throw({decode_error, Code, SubCode, Data}).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_header_decode_error(ErrorSubCode) ->
+    throw_header_decode_error(ErrorSubCode, <<>>).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_header_decode_error(ErrorSubCode, ErrorData) ->
+    throw_decode_error(?BGP_ERROR_CODE_MESSAGE_HEADER_ERROR, ErrorSubCode, ErrorData).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_open_decode_error(ErrorSubCode) ->
+    throw_open_decode_error(ErrorSubCode, <<>>).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_open_decode_error(ErrorSubCode, ErrorData) ->
+    throw_decode_error(?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ErrorSubCode, ErrorData).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_update_decode_error(ErrorSubCode) ->
+    throw_update_decode_error(ErrorSubCode, <<>>).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_update_decode_error(ErrorSubCode, ErrorData) ->
+    throw_decode_error(?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, ErrorSubCode, ErrorData).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
+throw_attribute_decode_error(ErrorSubCode, Flags, Type, Length, AttributeData) ->
+    <<_3, ExtendedLength:1, _:4>> = <<Flags:8>>,
+    case ExtendedLength of
+        0 -> LengthLength = 8;
+        1 -> LengthLength = 16
+    end,
+    ErrorData = <<Flags:8, Type:8, Length:LengthLength, AttributeData/binary>>,
+    throw_update_decode_error(ErrorSubCode, ErrorData).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
 %% TODO: we need to make a distinction between a badly formatted received message and a socket error ("closed").
-%% TODO: in the case of a socket error, we need to report and remember errno.
+%% TODO: in the case of a socket error, we need to report and remember errno (= Reason).
 
 receive_message_loop(ConnectionFsmPid, Socket) ->
     Message = try receive_message(ConnectionFsmPid, Socket)
     catch
-        throw:{tcp_error, _Reason} ->
-            io:format("TCP error while receiving message~n"),   %% @@@
-            error;         %% TODO: handle this; send event to FSM
+        throw:{tcp_error, Reason} ->
+            io:format("TCP error ~p while receiving message~n", [Reason]),
+            bgp_connection_fsm:tcp_connection_fails(ConnectionFsmPid),
+            error;
         throw:{decode_error, Code, SubCode, Data} ->
-            io:format("Received message was malformed, Code=~p SubCode=~p Data=~p~n", [Code, SubCode, Data]),  %% @@@
-            error;         %% TODO: handle this; send event to FSM
+            io:format("Received message was malformed, Code=~p SubCode=~p Data=~p~n", [Code, SubCode, Data]),
+            %% TODO: dispatch "received malformed message (other than notification)" to FSM
+            error;
         throw:{notification_decode_error} ->
-            io:format("Received notification was malformed~n"),  %% @@@
-            error          %% TODO: handle this; send event to FSM
+            io:format("Received notification was malformed~n"),
+            %% TODO: dispatch "received malformed notification message" to FSM
+            error
     end,
     case Message of
         error ->
+            io:format("Exit message loop~n"),
             error;
         _ ->
             io:format("Received message: ~p~n", [Message]),
@@ -120,43 +173,9 @@ receive_message_loop(ConnectionFsmPid, Socket) ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 receive_message(ConnectionFsmPid, Socket) ->
-    MarkerData = case gen_tcp:recv(Socket, 16) of
-        {ok, Data1} ->
-            Data1;
-        {error, Reason1} ->
-            throw({tcp_error, Reason1})
-    end,
-    case MarkerData of 
-        <<16#ffffffffffffffffffffffffffffffff:128>> ->
-            ok;
-        _ ->
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_MESSAGE_HEADER_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_CONNECTION_NOT_SYNCHRONIZED, 
-                   <<>>})
-    end,
-    MessageLength = case gen_tcp:recv(Socket, 2) of
-        {ok, <<MessageLength1:16>>} ->
-            MessageLength1;
-        {error, Reason2} ->
-            throw({tcp_error, Reason2})
-    end,
-    if 
-        (MessageLength < ?BGP_MESSAGE_MIN_LENGTH) or (MessageLength > ?BGP_MESSAGE_MAX_LENGTH) ->
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_MESSAGE_HEADER_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_BAD_MESSAGE_LENGTH,
-                   <<MessageLength:16>>});
-        true ->
-            ok
-    end,
-    TypeData = case gen_tcp:recv(Socket, 1) of
-        {ok, Data3} ->
-            Data3;
-        {error, Reason3} ->
-            throw({tcp_error, Reason3})
-    end,
-    <<Type:8>> = TypeData,
+    receive_marker(Socket),
+    MessageLength = receive_message_length(Socket),
+    Type = receive_message_type(Socket),
     {MinLength, MaxLength, DecodeFunction} = case Type of
         ?BGP_MESSAGE_TYPE_OPEN ->
             {?BGP_OPEN_MESSAGE_MIN_LENGTH, 
@@ -179,27 +198,66 @@ receive_message(ConnectionFsmPid, Socket) ->
              ?BGP_ROUTE_REFRESH_MESSAGE_MIN_LENGTH, 
              fun(FsmPid, Data) -> decode_route_refresh(FsmPid, Data) end};
         _ ->
-            throw({decode_error,
-                   ?BGP_ERROR_CODE_MESSAGE_HEADER_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_BAD_MESSAGE_TYPE,
-                   TypeData})
+            throw_header_decode_error(?BGP_ERROR_SUB_CODE_BAD_MESSAGE_TYPE, <<Type:8>>)
     end,
     if
         (MessageLength < MinLength) or (MessageLength > MaxLength) ->
-            throw({decode_error, 
-               ?BGP_ERROR_CODE_MESSAGE_HEADER_ERROR, 
-               ?BGP_ERROR_SUB_CODE_BAD_MESSAGE_LENGTH,
-               <<MessageLength:16>>});
+            throw_header_decode_error(?BGP_ERROR_SUB_CODE_BAD_MESSAGE_LENGTH, <<MessageLength:16>>);
         true ->
             ok
     end,
     MessageData = case gen_tcp:recv(Socket, MessageLength - 19) of
-        {ok, Data4} ->
-            Data4;
-        {error, Reason4} ->
-            throw({tcp_error, Reason4})
+        {ok, Data} ->
+            Data;
+        {error, Reason} ->
+            throw({tcp_error, Reason})
     end,
     DecodeFunction(ConnectionFsmPid, MessageData).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+receive_marker(Socket) ->
+    MarkerData = case gen_tcp:recv(Socket, 16) of
+        {ok, Data} ->
+            Data;
+        {error, Reason} ->
+            throw({tcp_error, Reason})
+    end,
+    case MarkerData of 
+        <<16#ffffffffffffffffffffffffffffffff:128>> ->
+            ok;
+        _ ->
+            throw_header_decode_error(?BGP_ERROR_SUB_CODE_CONNECTION_NOT_SYNCHRONIZED)
+    end,
+    ok.
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+receive_message_length(Socket) ->
+    MessageLength = case gen_tcp:recv(Socket, 2) of
+        {ok, <<MessageLength1:16>>} ->
+            MessageLength1;
+        {error, Reason} ->
+            throw({tcp_error, Reason})
+    end,
+    if 
+        (MessageLength < ?BGP_MESSAGE_MIN_LENGTH) or (MessageLength > ?BGP_MESSAGE_MAX_LENGTH) ->
+            throw_header_decode_error(?BGP_ERROR_SUB_CODE_BAD_MESSAGE_LENGTH, <<MessageLength:16>>);
+        true ->
+            ok
+    end,
+    MessageLength.
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+receive_message_type(Socket) ->
+    Type = case gen_tcp:recv(Socket, 1) of
+        {ok, <<Type1:8>>} ->
+            Type1;
+        {error, Reason} ->
+            throw({tcp_error, Reason})
+    end,
+    Type.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -212,28 +270,19 @@ decode_open(ConnectionFsmPid, Data) ->
             ok;
         true ->
             %% TODO: special event for FSM?
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_UNSUPPORTED_VERSION_NUMBER, 
-                   <<SupportedVersion:16>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSUPPORTED_VERSION_NUMBER, <<SupportedVersion:16>>)
     end,
     if
         MyAs == 7675 ->             %% TODO: replace by real check
             ok;
         true ->
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_BAD_PEER_AS, 
-                   <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_BAD_PEER_AS)
     end,
     if
         (HoldTime == 0) or (HoldTime > 2) ->
             ok;
         true ->
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_UNACCEPTABLE_HOLD_TIME, 
-                   <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNACCEPTABLE_HOLD_TIME)
     end,
     %% TODO: check syntax of identifier; it must be a "valid unicast IP host address"
     io:format("Receive OPEN~n"),
@@ -267,7 +316,7 @@ decode_open_optional_paramaters(OptParams, OptParamsData) ->
         <<Type1, Length1, Data1:Length1/binary, Rest1/binary>> ->
             {Type1, Data1, Rest1};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end,
     case Type of
         ?BGP_OPEN_PARAMETER_DEPRECATED_AUTHENTICATION ->
@@ -298,7 +347,7 @@ decode_capabilities(Capabilities, CapabilitiesData) ->
         <<Code1, Length1, Data1:Length1/binary, Rest1/binary>> ->
             {Code1, Data1, Rest1};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end,
     Capability = case Code of
         ?BGP_CAPABILITY_CODE_RESERVED ->
@@ -336,7 +385,7 @@ decode_capability_multi_protocol(Data) ->
         <<Afi:16, _Reserved:8, Safi:8>> ->
             {multi_protocol, Afi, Safi};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -346,7 +395,7 @@ decode_capability_route_refresh(Data) ->
         <<>> ->
             {route_refresh};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -356,8 +405,7 @@ decode_capability_route_refresh_old(Data) ->
         <<>> ->
             {route_refresh_old};
         _ ->
-            %% TODO: For every throw like this, log something like "Malformed route-refresh-old capability".
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -379,7 +427,7 @@ decode_capability_multiple_routes_to_destination(Data) ->
         <<>> ->
             {multiple_routes_to_destination};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -390,7 +438,7 @@ decode_capability_graceful_restart(Data) ->
             %% TODO: Decode Rest
             {graceful_restart, RestartState, RestartTime};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -400,7 +448,7 @@ decode_capability_four_octet_as(Data) ->
         <<>> ->
             {four_octet_as};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -410,7 +458,7 @@ decode_capability_dynamic_capability(Data) ->
         <<>> ->
             {dynamic_capability};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -420,7 +468,7 @@ decode_capability_multi_session(Data) ->
         <<>> ->
             {multi_session};
         _ ->
-            throw({decode_error, ?BGP_ERROR_CODE_OPEN_MESSAGE_ERROR, ?BGP_ERROR_SUB_CODE_UNSPECIFIC, <<>>})
+            throw_open_decode_error(?BGP_ERROR_SUB_CODE_UNSPECIFIC)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -434,18 +482,15 @@ decode_update(ConnectionFsmPid, Data) ->
           AdvertisedRoutesData1/binary>> ->
             {WithdrawnRoutesData1, AttributesData1, AdvertisedRoutesData1};
         _ ->
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST, 
-                   <<>>})
+            throw_update_decode_error(?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST)
     end,
     WithdrawnRoutes = decode_nlri_list(WithdrawnRoutesData),
-    Attributes = decode_attributes(AttributesData),
+    Attributes = decode_attribute_list(AttributesData),
     AdvertisedRoutes = decode_nlri_list(AdvertisedRoutesData),
     Update = #bgp_update{withdrawn_routes = WithdrawnRoutes, 
                           attributes = Attributes, 
                           advertised_routes = AdvertisedRoutes},
-    bgp_connection_fsm:receive_update(ConnectionFsmPid),      %% TODO: pass in notification
+    bgp_connection_fsm:receive_update(ConnectionFsmPid),      %% TODO: pass in the update message
     Update.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -455,12 +500,12 @@ decode_nlri_list(Data) ->
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-decode_nlri_list(Routes, <<>>) ->
-    Routes;
+decode_nlri_list(Nlris, <<>>) ->
+    Nlris;
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-decode_nlri_list(Routes, Data) ->
+decode_nlri_list(Nlris, Data) ->
     <<LengthInBits:8, Rest1/binary>> = Data,
     LengthInBytes = (LengthInBits + 7) div 8,
     {Prefix, Rest3} = case Rest1 of
@@ -468,105 +513,106 @@ decode_nlri_list(Routes, Data) ->
             {{PrefixData, LengthInBits}, Rest2};
         _ ->
             %% TODO: is this the right error?
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST, 
-                   <<>>})
+            throw_update_decode_error(?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST)
     end,
     %% TODO: force bits not covered by prefix length to 0?
-    NewRoutes = [Prefix | Routes],  
-    decode_nlri_list(NewRoutes, Rest3).
+    NewNlris = [Prefix | Nlris],  
+    decode_nlri_list(NewNlris, Rest3).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_attributes(Data) ->
-    decode_attributes(#attributes{}, Data).
+%% TODO: check for the presense of all mandatory attributes in the FSM (here, we don't know the type of the peer).
+
+decode_attribute_list(Data) ->
+    decode_attribute_list(#attributes{}, Data).
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-decode_attributes(Attributes, <<>>) ->
+decode_attribute_list(Attributes, <<>>) ->
     Attributes;
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-%% TODO: check for the presense of all mandatory attributes in the FSM (here, we don't know the type of the peer).
+decode_attribute_list(Attributes, Data) ->
+    {NewAttributes, RestData} = decode_attribute(Attributes, Data),
+    decode_attribute_list(NewAttributes, RestData).
 
-decode_attributes(Attributes, Data) ->
+%%----------------------------------------------------------------------------------------------------------------------
+
+%% TODO: check for same attribute present more than once. is it always illegal (even for communities, etc.)?
+
+decode_attribute(Attributes, Data) ->
+    io:format("decode attribute~n"),
     {Flags, Type, LengthAndRestData} = case Data of
-        <<Type1:8, Flags1:8, LengthAndRestData1/binary>> ->
+        <<Flags1:8, Type1:8, LengthAndRestData1/binary>> ->
             {Flags1, Type1, LengthAndRestData1};
         _ ->
             %% TODO: is this the right error?
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST, 
-                   <<>>})
+            throw_update_decode_error(?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST)
     end,
+    io:format("attribute Type=~p~n", [Type]),
     <<_:3, ExtendedLength:1, _:4>> = <<Flags:8>>,
    case ExtendedLength of
        0 -> LengthLength = 8;
        1 -> LengthLength = 16
     end,
-    {Length, Data, Rest} = case LengthAndRestData of
-        <<Length1:LengthLength, Data1:Length1/binary, Rest1/binary>> ->
-            {Length1, Data1, Rest1};
+    {Length, AttributeData, RestData} = case LengthAndRestData of
+        <<Length1:LengthLength, AttributeData1:Length1/binary, RestData1/binary>> ->
+            {Length1, AttributeData1, RestData1};
         _ ->
             %% TODO: is this the right error?
-            throw({decode_error, 
-                   ?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, 
-                   ?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST, 
-                   <<>>})
+            throw_update_decode_error(?BGP_ERROR_SUB_CODE_MALFORMED_ATTRIBUTE_LIST)
     end,
-    %% TODO: check for same attribute present more than once. is it always illegal (even for communities, etc.)?
     NewAttributes = case Type of
         ?BGP_PATH_ATTRIBUTE_ORIGIN ->
-            decode_origin(Flags, Type, Length, Data, Attributes);
+            decode_origin(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_AS_PATH ->
-            decode_as_path(Flags, Type, Length, Data, Attributes);
+            decode_as_path(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_NEXT_HOP ->
-            decode_next_hop(Flags, Type, Length, Data, Attributes);
+            decode_next_hop(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_MULTI_EXIT_DISC ->
-            decode_multi_exit_desc(Flags, Type, Length, Data, Attributes);
+            decode_multi_exit_desc(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_LOCAL_PREF ->
-            decode_local_pref(Flags, Type, Length, Data, Attributes);
+            decode_local_pref(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_ATOMIC_AGGREGATE ->
-            decode_atomic_aggregate(Flags, Type, Length, Data, Attributes);
+            decode_atomic_aggregate(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_AGGREGATOR ->
-            decode_aggregator(Flags, Type, Length, Data, Attributes);
+            decode_aggregator(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_COMMUNITY ->
-            decode_community(Flags, Type, Length, Data, Attributes);
+            decode_community(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_ORIGINATOR_ID ->
-            decode_originator_id(Flags, Type, Length, Data, Attributes);
+            decode_originator_id(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_CLUSTER_LIST ->
-            decode_cluster_list(Flags, Type, Length, Data, Attributes);
+            decode_cluster_list(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_DESTINATION_PREFERENCE ->
-            decode_destination_preference(Flags, Type, Length, Data, Attributes);
+            decode_destination_preference(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_ADVERTISER ->
-            decode_advertiser(Flags, Type, Length, Data, Attributes);
+            decode_advertiser(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_CLUSTER_ID ->
-            decode_cluster_id(Flags, Type, Length, Data, Attributes);
+            decode_cluster_id(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_MP_REACH_NLRI ->
-            decode_reach_nlri(Flags, Type, Length, Data, Attributes);
+            decode_reach_nlri(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_MP_UNREACH_NLRI ->
-            decode_mp_unreach_nlri(Flags, Type, Length, Data, Attributes);
+            decode_mp_unreach_nlri(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_EXTENDED_COMMUNITIES ->
-            decode_extended_communities(Flags, Type, Length, Data, Attributes);
+            decode_extended_communities(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_AS4_PATH ->
-            decode_as4_path(Flags, Type, Length, Data, Attributes);
+            decode_as4_path(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_AS4_AGGREGATOR ->
-            decode_as4_aggregator(Flags, Type, Length, Data, Attributes);
+            decode_as4_aggregator(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_SAFI_SPECIFIC ->
-            decode_safi_specific(Flags, Type, Length, Data, Attributes);
+            decode_safi_specific(Attributes, Flags, Type, Length, AttributeData);
         ?BGP_PATH_ATTRIBUTE_CONNECTOR ->
-            decode_connector(Flags, Type, Length, Data, Attributes);
+            decode_connector(Attributes, Flags, Type, Length, AttributeData);
         _ ->
-            decode_unrecognized_attribute(Flags, Type, Length, Data, Attributes)
+            decode_unrecognized_attribute(Attributes, Flags, Type, Length, AttributeData)
     end,
-    decode_attributes(NewAttributes, Rest).
+    {NewAttributes, RestData}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_origin(Flags, Type, Length, Data, Attributes) ->
+decode_origin(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode ORIGIN~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, well_known_mandatory),
     ok = check_attribute_length(Flags, Type, Length, Data, 1),
     <<Origin:8>> = Data,
@@ -574,20 +620,92 @@ decode_origin(Flags, Type, Length, Data, Attributes) ->
         (Origin == ?BGP_ORIGIN_IGP) or (Origin == ?BGP_ORIGIN_EGP) or (Origin == ?BGP_ORIGIN_INCOMPLETE) ->
             ok;
         true ->
-            attribute_decode_error(Flags, Type, Length, Data, ?BGP_ERROR_SUB_CODE_INVALID_ORIGIN_ATTRIBUTE)
+            throw_attribute_decode_error(?BGP_ERROR_SUB_CODE_INVALID_ORIGIN_ATTRIBUTE, Flags, Type, Length, Data)
     end,
     Attributes#attributes{origin = Origin}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_as_path(Flags, Type, Length, Data, Attributes) ->
+decode_as_path(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode AS-PATH~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, well_known_mandatory),
-    %% TODO: implement this
-    Attributes#attributes{as_path = present_todo_decoding}.
+    AsPath = case decode_as_path_segment_list(Data) of
+        error ->
+            throw_attribute_decode_error(?BGP_ERROR_SUB_CODE_MALFORMED_AS_PATH, Flags, Type, Length, Data);
+        AsPathSegmentList ->
+            AsPathSegmentList
+    end,
+    Attributes#attributes{as_path = AsPath}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_next_hop(Flags, Type, Length, Data, Attributes) ->
+decode_as_path_segment_list(Data) ->
+    decode_as_path_segment_list([], Data).
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+decode_as_path_segment_list(AsPathSegmentList, <<>>) ->
+    lists:reverse(AsPathSegmentList);
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+decode_as_path_segment_list(AsPathSegmentList, Data) ->
+    case decode_as_path_segment(Data) of
+        {ok, AsPathSegment, RestData} ->
+            decode_attribute_list([AsPathSegment | AsPathSegmentList], RestData);
+        error ->
+            error
+    end.
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+decode_as_path_segment(Data) ->
+    case Data of
+        <<Type:8, AsCount:8, Rest/binary>> ->
+            if
+                (Type == ?BGP_AS_PATH_SEGMENT_TYPE_AS_SET) or
+                (Type == ?BGP_AS_PATH_SEGMENT_TYPE_AS_SEQUENCE) or
+                (Type == ?BGP_AS_PATH_SEGMENT_TYPE_AS_CONFED_SEQUENCE) or
+                (Type == ?BGP_AS_PATH_SEGMENT_TYPE_AS_CONFED_SET) ->
+                    case decode_as_numbers(AsCount, Rest) of
+                        error ->
+                            error;
+                        AsNumbers ->
+                            #as_path_segment{type = Type, as_numbers = AsNumbers}
+                    end;
+                true ->
+                    error
+            end;
+        _ ->
+            error
+    end.
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+decode_as_numbers(AsCount, Data) ->
+    decode_as_numbers([], AsCount, Data).
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+decode_as_numbers(AsNumbers, 0, Data) ->
+    {Data, lists:reverse(AsNumbers)};
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+decode_as_numbers(AsNumbers, AsCount, Data) ->
+    {As, Rest} = case Data of 
+        <<As1:16, Rest1/binary>> ->
+            {As1, Rest1};
+        _ ->
+            error
+    end,
+    NewAsNumbers = [As | AsNumbers],
+    decode_as_numbers(NewAsNumbers, AsCount - 1, Rest).
+    
+%%----------------------------------------------------------------------------------------------------------------------
+
+decode_next_hop(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode NEXT-HOP~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, well_known_mandatory),
     NextHop = case Length of
         4 ->
@@ -602,7 +720,8 @@ decode_next_hop(Flags, Type, Length, Data, Attributes) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_multi_exit_desc(Flags, Type, Length, Data, Attributes) ->
+decode_multi_exit_desc(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode MED~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, optional_non_transitive),
     ok = check_attribute_length(Flags, Type, Length, Data, 4),
     <<Med:32>> = Data,
@@ -610,7 +729,8 @@ decode_multi_exit_desc(Flags, Type, Length, Data, Attributes) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_local_pref(Flags, Type, Length, Data, Attributes) ->
+decode_local_pref(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode LOCAL-PREF~n"),
     % TODO: local-pref is actually mandatory for internal peers and confedration peers; but that is handled in the FSM
     ok = check_attribute_flags(Flags, Type, Length, Data, well_known_discretionary),
     ok = check_attribute_length(Flags, Type, Length, Data, 4),
@@ -619,14 +739,16 @@ decode_local_pref(Flags, Type, Length, Data, Attributes) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_atomic_aggregate(Flags, Type, Length, Data, Attributes) ->
+decode_atomic_aggregate(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode ATOMIC-AGGREGATE~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, well_known_discretionary),
     ok = check_attribute_length(Flags, Type, Length, Data, 0),
     Attributes#attributes{atomic_aggregate = present}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_aggregator(Flags, Type, Length, Data, Attributes) ->
+decode_aggregator(Attributes, Flags, Type, Length, Data) ->
+    io:format("decode AGGREGATOR~n"),
     ok = check_attribute_flags(Flags, Type, Length, Data, optional_transitive),
     ok = check_attribute_length(Flags, Type, Length, Data, 6),
     %% TODO: implement this
@@ -636,85 +758,85 @@ decode_aggregator(Flags, Type, Length, Data, Attributes) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_community(Flags, Type, Length, Data, Attributes) ->
+decode_community(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_originator_id(Flags, Type, Length, Data, Attributes) ->
+decode_originator_id(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_cluster_list(Flags, Type, Length, Data, Attributes) ->
+decode_cluster_list(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_destination_preference(Flags, Type, Length, Data, Attributes) ->
+decode_destination_preference(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_advertiser(Flags, Type, Length, Data, Attributes) ->
+decode_advertiser(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_cluster_id(Flags, Type, Length, Data, Attributes) ->
+decode_cluster_id(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_reach_nlri(Flags, Type, Length, Data, Attributes) ->
+decode_reach_nlri(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_mp_unreach_nlri(Flags, Type, Length, Data, Attributes) ->
+decode_mp_unreach_nlri(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_extended_communities(Flags, Type, Length, Data, Attributes) ->
+decode_extended_communities(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_as4_path(Flags, Type, Length, Data, Attributes) ->
+decode_as4_path(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_as4_aggregator(Flags, Type, Length, Data, Attributes) ->
+decode_as4_aggregator(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_safi_specific(Flags, Type, Length, Data, Attributes) ->
+decode_safi_specific(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_connector(Flags, Type, Length, Data, Attributes) ->
+decode_connector(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_unrecognized_attribute(Flags, Type, Length, Data, Attributes) ->
+decode_unrecognized_attribute(Attributes, Flags, Type, Length, Data) ->
     %% TODO: implement this
     Attributes.
 
@@ -736,7 +858,7 @@ check_attribute_flags(Flags, Type, Length, Data, AttributeType) ->
         true ->
             ok;
         false ->
-            attribute_decode_error(Flags, Type, Length, Data, ?BGP_ERROR_SUB_CODE_ATTRIBUTE_FLAGS_ERROR)
+            throw_attribute_decode_error(?BGP_ERROR_SUB_CODE_ATTRIBUTE_FLAGS_ERROR, Flags, Type, Length, Data)
     end.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -746,20 +868,9 @@ check_attribute_length(Flags, Type, Length, Data, ExpectedLength) ->
         Length == ExpectedLength ->
             ok;
         true ->
-            attribute_decode_error(Flags, Type, Length, Data, ?BGP_ERROR_SUB_CODE_ATTRIBUTE_LENGTH_ERROR)
+            throw_attribute_decode_error(?BGP_ERROR_SUB_CODE_ATTRIBUTE_LENGTH_ERROR, Flags, Type, Length, Data)
     end.
 
-%%----------------------------------------------------------------------------------------------------------------------
-
-attribute_decode_error(Flags, Type, Length, Data, ErrorSubCode) ->
-    <<_3, ExtendedLength:1, _:4>> = <<Flags:8>>,
-    case ExtendedLength of
-        0 -> LengthLength = 8;
-        1 -> LengthLength = 16
-    end,
-    AttributeData = <<Flags:8, Type:8, Length:LengthLength, Data/binary>>,
-    throw({decode_error, ?BGP_ERROR_CODE_UPDATE_MESSAGE_ERROR, ErrorSubCode, AttributeData}).
-    
 %%----------------------------------------------------------------------------------------------------------------------
 
 decode_notification(ConnectionFsmPid, Data) ->

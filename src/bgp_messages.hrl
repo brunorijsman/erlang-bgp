@@ -14,12 +14,9 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--record(bgp_open, {
-    version = 4,
-    my_as,
-    hold_time = 180,
-    identifier,
-    options = []
+-record(as_path_segment, {
+    type,
+    as_numbers = []
     }).
 
 -record(attributes, {
@@ -31,6 +28,14 @@
     atomic_aggregate = not_present,
     aggregator = not_present,
     unrecognized = [] 
+    }).
+
+-record(bgp_open, {
+    version = 4,
+    my_as,
+    hold_time = 180,
+    identifier,
+    options = []
     }).
 
 -record(bgp_update, {
