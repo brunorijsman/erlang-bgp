@@ -22,7 +22,7 @@
 -behavior(gen_server).
 
 -include("bgp_listener.hrl").
--include("constants.hrl").
+-include("bgp_constants.hrl").
 
 %% public API
 
@@ -45,32 +45,32 @@
 %%----------------------------------------------------------------------------------------------------------------------
 
 start_link() ->
-    gen_server:start_link({local, ?BGP_LISTENER_SERVER}, ?MODULE, [], []).     %% TODO: use Pid instead of name?
+    gen_server:start_link({local, bgp_listener}, ?MODULE, [], []).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 stop() ->
-    gen_server:call(?MODULE, {stop}).    %% TODO: change MODULE TO BGP_LISTENER_SERVER here and elsewhere
+    gen_server:call(bgp_listener, {stop}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 register_acceptable_address(RemoteAddress) ->
-    gen_server:call(?MODULE, {register_acceptable_address, RemoteAddress}).
+    gen_server:call(bgp_listener, {register_acceptable_address, RemoteAddress}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 unregister_acceptable_address(RemoteAddress) ->
-    gen_server:call(?MODULE, {unregister_acceptable_address, RemoteAddress}).
+    gen_server:call(bgp_listener, {unregister_acceptable_address, RemoteAddress}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 show_acceptable_addresss() ->
-    gen_server:call(?MODULE, {show_acceptable_addresss}).
+    gen_server:call(bgp_listener, {show_acceptable_addresss}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 incoming_connection(Socket) ->
-    gen_server:call(?MODULE, {incoming_connection, Socket}).
+    gen_server:call(bgp_listener, {incoming_connection, Socket}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -79,7 +79,7 @@ init([]) ->
     Options = [binary, {packet, raw}, {active, false}, {reuseaddr, true}],
     {ok, ListenSocket} = gen_tcp:listen(?BGP_TCP_LISTEN_PORT, Options),       %% TODO: handle errors (e.g. eaccess => must run as root)
     AcceptLoopPid = spawn_link(fun () -> accept_loop(ListenSocket) end),
-    io:format("Accept loop PID is ~p~n", [AcceptLoopPid]),
+    register(bgp_acceptor, AcceptLoopPid),
     State = #bgp_listener_state{accept_loop_pid = AcceptLoopPid,
                                 listen_socket = ListenSocket, 
                                 acceptable_address_table = AcceptableAddressTable},

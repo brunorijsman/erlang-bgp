@@ -14,18 +14,18 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--module(bgp_receiver).
+-module(bgp_receive_scheduler).
 -author('Bruno Rijsman').
 
 -behavior(gen_server).
 
--include("bgp_receiver.hrl").
+-include("bgp_receive_scheduler.hrl").
+-include("bgp_constants.hrl").
 -include("bgp_messages.hrl").
--include("constants.hrl").                  %% TODO: rename this
 
 %% public API
 
--export([start_link/2,
+-export([start_link/4,
          stop/1]).
 
 %% gen_server callbacks
@@ -39,29 +39,37 @@
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-start_link(ConnectionFsmPid, Socket) ->
-    gen_server:start_link(?MODULE, [ConnectionFsmPid, Socket], []).
+start_link(ConnectionFsmPid, RemoteAddress, Direction, Socket) ->
+    NameString = case Direction of
+        incoming -> io_lib:format("bgp_cnx_rxs_~p_in", [RemoteAddress]);
+        outgoing -> io_lib:format("bgp_cnx_rxs_~p_out", [RemoteAddress])
+    end,
+    Name = list_to_atom(lists:flatten(NameString)),
+    io:format("*** start receive scheduler ~p~n", [Name]),
+    gen_server:start_link({local, Name}, ?MODULE, [ConnectionFsmPid, RemoteAddress, Direction, Socket], []).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-stop(ReceiverPid) ->
-    gen_server:call(ReceiverPid, {stop}).
+stop(ReceiveSchedulerPid) ->
+    gen_server:call(ReceiveSchedulerPid, {stop}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-init([ConnectionFsmPid, Socket]) ->
+init([ConnectionFsmPid, RemoteAddress, Direction, Socket]) ->
     % TODO: become the controlling process for the socket. There is no race condition because we are the first and the
     % first and only ones to read the socket.
-    ReceiveMessageLoopPid = spawn_link(fun () -> receive_message_loop(ConnectionFsmPid, Socket) end),
-    State = #bgp_receiver_state{connection_fsm_pid = ConnectionFsmPid, 
-                                receiver_pid = ReceiveMessageLoopPid, 
-                                socket = Socket},
+    ReceiverPid = start_receiver(ConnectionFsmPid, RemoteAddress, Direction, Socket),
+    State = #bgp_receive_scheduler_state{connection_fsm_pid = ConnectionFsmPid, 
+                                         direction = Direction,
+                                         remote_address = RemoteAddress,
+                                         socket = Socket,
+                                         receiver_pid = ReceiverPid},
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 handle_call({stop}, _From, State) ->
-    #bgp_receiver_state{receiver_pid = ReceiveMessageLoopPid} = State,
+    #bgp_receive_scheduler_state{receiver_pid = ReceiveMessageLoopPid} = State,
     case ReceiveMessageLoopPid of
         none ->
             ok;
@@ -83,7 +91,6 @@ handle_info(_Info, State) ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 terminate(_Reason, _State) ->
-    %% TODO: do we need to do the same stuff as stop here?
     ok.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -91,6 +98,18 @@ terminate(_Reason, _State) ->
 code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
+%%----------------------------------------------------------------------------------------------------------------------
+
+start_receiver(ConnectionFsmPid, RemoteAddress, Direction, Socket) ->
+    NameString = case Direction of
+        incoming -> io_lib:format("bgp_cnx_rx_~p_in", [RemoteAddress]);
+        outgoing -> io_lib:format("bgp_cnx_rx_~p_out", [RemoteAddress])
+    end,
+    Name = list_to_atom(lists:flatten(NameString)),
+    Pid = spawn_link(fun () -> receive_message_loop(ConnectionFsmPid, Socket) end),
+    register(Name, Pid),
+    {ok, Pid}.
+    
 %%----------------------------------------------------------------------------------------------------------------------
 
 %% TODO: All of these throw_... functions should take in an additional string argument which contains a very detailed
@@ -758,85 +777,85 @@ decode_aggregator(Attributes, Flags, Type, Length, Data) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_community(Attributes, Flags, Type, Length, Data) ->
+decode_community(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_originator_id(Attributes, Flags, Type, Length, Data) ->
+decode_originator_id(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_cluster_list(Attributes, Flags, Type, Length, Data) ->
+decode_cluster_list(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_destination_preference(Attributes, Flags, Type, Length, Data) ->
+decode_destination_preference(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_advertiser(Attributes, Flags, Type, Length, Data) ->
+decode_advertiser(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_cluster_id(Attributes, Flags, Type, Length, Data) ->
+decode_cluster_id(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_reach_nlri(Attributes, Flags, Type, Length, Data) ->
+decode_reach_nlri(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_mp_unreach_nlri(Attributes, Flags, Type, Length, Data) ->
+decode_mp_unreach_nlri(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_extended_communities(Attributes, Flags, Type, Length, Data) ->
+decode_extended_communities(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_as4_path(Attributes, Flags, Type, Length, Data) ->
+decode_as4_path(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_as4_aggregator(Attributes, Flags, Type, Length, Data) ->
+decode_as4_aggregator(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_safi_specific(Attributes, Flags, Type, Length, Data) ->
+decode_safi_specific(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_connector(Attributes, Flags, Type, Length, Data) ->
+decode_connector(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-decode_unrecognized_attribute(Attributes, Flags, Type, Length, Data) ->
+decode_unrecognized_attribute(Attributes, _Flags, _Type, _Length, _Data) ->
     %% TODO: implement this
     Attributes.
 

@@ -15,6 +15,8 @@
 %% @copyright 2009 Bruno Rijsman
 
 -record(bgp_send_scheduler_state, {
-    sender_pid,
-    socket
+    direction,
+    remote_address,
+    socket,
+    sender_pid
     }).

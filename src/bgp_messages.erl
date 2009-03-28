@@ -24,8 +24,8 @@
          encode_keep_alive/0,
          encode_notification/1]).
 
--include("constants.hrl").
 -include("bgp_messages.hrl").
+-include("bgp_constants.hrl").
 -include_lib("eunit/include/eunit.hrl").            %% TODO: write unit tests
 
 %%----------------------------------------------------------------------------------------------------------------------

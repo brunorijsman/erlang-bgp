@@ -14,8 +14,10 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--record(bgp_listener_state, {
-    accept_loop_pid,                 %% TODO: rename to accept_pid
-    listen_socket,
-    acceptable_address_table
+-record(bgp_receive_scheduler_state, {
+    connection_fsm_pid,
+    direction,
+    remote_address,
+    socket,
+    receiver_pid
     }).

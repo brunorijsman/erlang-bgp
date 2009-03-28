@@ -24,7 +24,7 @@
 
 %% public API
 
--export([start_link/1,
+-export([start_link/3,
          stop/1,
          send_open/2,
          send_update/2,
@@ -42,8 +42,13 @@
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-start_link(Socket) ->
-    gen_server:start_link(?MODULE, [Socket], []).
+start_link(RemoteAddress, Direction, Socket) ->
+    NameString = case Direction of
+        incoming -> io_lib:format("bgp_cnx_txs_~p_in", [RemoteAddress]);
+        outgoing -> io_lib:format("bgp_cnx_txs_~p_out", [RemoteAddress])
+    end,
+    Name = list_to_atom(lists:flatten(NameString)),
+    gen_server:start_link({local, Name}, ?MODULE, [RemoteAddress, Direction, Socket], []).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -85,8 +90,11 @@ send_failed(SendSchedulerPid) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-init([Socket]) ->
-    State = #bgp_send_scheduler_state{sender_pid = none, socket = Socket},
+init([RemoteAddress, Direction, Socket]) ->
+    State = #bgp_send_scheduler_state{sender_pid = none, 
+                                      remote_address = RemoteAddress, 
+                                      direction = Direction, 
+                                      socket = Socket},
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -104,7 +112,6 @@ handle_call({stop}, _From, State) ->
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call({send_open, Open}, _From, State) ->
-    io:format("SEND SCHEDULER: Open~n"),  %% @@@@
     EncodedMessage = bgp_messages:encode_open(Open),
     {ok, NewState} = schedule_send_message(State, EncodedMessage),
     {reply, ok, NewState};
@@ -112,14 +119,12 @@ handle_call({send_open, Open}, _From, State) ->
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call({send_update, _Update}, _From, State) ->
-    io:format("SEND SCHEDULER: update (TODO:)~n"),  %% @@@@
     %% TODO:
     {reply, ok, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call({send_notification, _Notification}, _From, State) ->
-    io:format("SEND SCHEDULER: notification (TODO:)~n"),  %% @@@@
     %% TODO:
     {reply, ok, State};
 
@@ -133,7 +138,6 @@ handle_call(send_keep_alive, _From, State) ->
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call(send_completed, _From, State) ->
-    io:format("SEND SCHEDULER: send_completed (TODO:)~n"),  %% @@@@
     %% TODO: take the next message off the queue (if any, and send it)
     %% TODO: some way to avoid spawning lots of processes? have a call get_more_data?
     {reply, ok, State};
@@ -173,6 +177,8 @@ schedule_send_message(State, EncodedMessage) ->
     #bgp_send_scheduler_state{socket = Socket} = State,
     SendSchedulerPid = self(),
     SenderPid = spawn_link(fun () -> sender(SendSchedulerPid, Socket, EncodedMessage) end),
+     %% TODO: Include remote address and direction in process name
+    register(bgp_cnx_tx, SenderPid),
     io:format("Sender PID is ~p~n", [SenderPid]),
     {ok, State}.
 

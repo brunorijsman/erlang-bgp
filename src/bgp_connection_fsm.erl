@@ -25,13 +25,14 @@
 
 -include("bgp_connection_fsm.hrl").
 -include("bgp_messages.hrl").
--include("constants.hrl").
+-include("bgp_constants.hrl").
 
 -export([]).
 
 %% public API
 
--export([create/2,
+-export([start_link/2,
+         stop/1,                %% TODO: Figure out what the proper way is to shut down and FSM
          manual_start/1,
          manual_stop/1,
          automatic_start/1, 
@@ -89,15 +90,14 @@
 
 %% TODO: add more parameters: the received packet, etc.
 
-%% TODO: change back to start_link and stop
-create(Direction, RemoteAddress) ->
-    io:format("API: create Direction=~p RemoteAddress=~p~n", [Direction, RemoteAddress]),
-    gen_fsm:start_link(bgp_connection_fsm, [Direction, RemoteAddress], [{debug, [trace, log, statistics]}]).
+start_link(Direction, RemoteAddress) ->
+    io:format("API: start_link Direction=~p RemoteAddress=~p~n", [Direction, RemoteAddress]),
+    Name = list_to_atom(lists:flatten(io_lib:format("bgp_cnx_fsm_~p_out", [RemoteAddress]))),
+    gen_fsm:start_link({local, Name}, ?MODULE, [Direction, RemoteAddress], [{debug, [trace, log, statistics]}]).
 
-%% TODO:
-%% destroy(Pid) ->
-%%    io:format("API: destroy~n"),
-%%    gen_fsm:send_event(Pid, event_destroy).
+stop(Pid) ->
+    io:format("API: stop~n"),
+    gen_fsm:send_event(Pid, stop).
 
 manual_start(Pid) -> 
     io:format("API: manual_start~n"),
@@ -355,10 +355,10 @@ action_release_resources(State) ->
 
 action_initialize_connection_resources(State, Socket) ->
     io:format("action_initialize_connection_resources~n"),
+    #connection_state{remote_address = RemoteAddress, direction = Direction} = State,
     Self = self(),
-    {ok, SendSchedulerPid} = bgp_send_scheduler:start_link(Socket),
-    {ok, ReceiverPid} = bgp_receiver:start_link(Self, Socket),
-    %% TODO: also start receiver
+    {ok, SendSchedulerPid} = bgp_send_scheduler:start_link(RemoteAddress, Direction, Socket),
+    {ok, ReceiverPid} = bgp_receive_scheduler:start_link(Self, RemoteAddress, Direction, Socket),
     State#connection_state{socket = Socket, 
                            send_scheduler_pid = SendSchedulerPid,
                            receiver_pid = ReceiverPid}.
@@ -421,13 +421,13 @@ action_start_keep_alive_timer(State) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-%% TODO: Why is the keep-alive timer not stopped anywhere?
+%% TODO: This function is not yet use; why is the keep-alive timer not stopped anywhere?
 
-action_stop_keep_alive_timer(State) ->
-    io:format("action_stop_keep_alive_timer~n"),
-    #connection_state{keep_alive_timer = Timer} = State,
-    NewTimer = cancel_timer(Timer),
-    State#connection_state{keep_alive_timer = NewTimer}.
+%action_stop_keep_alive_timer(State) ->
+%    io:format("action_stop_keep_alive_timer~n"),
+%    #connection_state{keep_alive_timer = Timer} = State,
+%    NewTimer = cancel_timer(Timer),
+%    State#connection_state{keep_alive_timer = NewTimer}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -447,13 +447,13 @@ action_start_hold_timer(State) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-%% TODO: Why is the hold timer not stopped anywhere
+%% TODO: This function is not yet used; why is the hold timer not stopped anywhere
 
-action_stop_hold_timer(State) ->
-    io:format("action_stop_hold_timer~n"),
-    #connection_state{hold_timer = Timer} = State,
-    NewTimer = cancel_timer(Timer),
-    State#connection_state{hold_timer = NewTimer}.
+%action_stop_hold_timer(State) ->
+%    io:format("action_stop_hold_timer~n"),
+%    #connection_state{hold_timer = Timer} = State,
+%    NewTimer = cancel_timer(Timer),
+%    State#connection_state{hold_timer = NewTimer}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -462,6 +462,8 @@ action_initiate_tcp_connection(State) ->
     #connection_state{remote_address = RemoteAddress} = State,
     FsmPid = self(),
     ConnectPid = spawn_link(fun () -> connect(RemoteAddress, FsmPid) end),
+    ConnectProcessName = list_to_atom(lists:flatten(io_lib:format("bgp_connect_~p", [RemoteAddress]))),
+    register(ConnectProcessName, ConnectPid),
     State#connection_state{connect_pid = ConnectPid}.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -514,11 +516,13 @@ action_start_listening_for_connection(State) ->
 
 %% TODO: put in comment at top that we use this instead of the vague "continue to listen" action from the RFC
 
-action_stop_listening_for_connection(State) ->
-    io:format("action_stop_listening_for_connection"),
-    #connection_state{remote_address = RemoteAddress} = State,
-    bgp_listener:unregister_acceptable_address(RemoteAddress),
-    State.
+% TODO: This function is not yet used anywhere.
+
+%action_stop_listening_for_connection(State) ->
+%    io:format("action_stop_listening_for_connection"),
+%    #connection_state{remote_address = RemoteAddress} = State,
+%    bgp_listener:unregister_acceptable_address(RemoteAddress),
+%    State.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
