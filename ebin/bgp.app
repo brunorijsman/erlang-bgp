@@ -5,6 +5,7 @@
               bgp_connection_fsm,
               bgp_listener,
               bgp_messages,
+              bgp_peer,
               bgp_receive_scheduler,
               bgp_send_scheduler]}
   ]

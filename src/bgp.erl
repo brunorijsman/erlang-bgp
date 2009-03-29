@@ -64,7 +64,9 @@ remove_peer(RemoteAddress) ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 test() ->
-    add_peer({192, 168, 1, 105}).
+    RemoteAddress = {192, 168, 1, 105}, 
+    {ok, PeerPid} = add_peer(RemoteAddress),
+    bgp_peer:set_remote_as(PeerPid, 1234).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -86,11 +88,9 @@ handle_call({stop}, _From, State) ->
 
 handle_call({add_peer, RemoteAddress}, _From, State) ->
     #bgp_state{peer_table = PeerTable} = State,
-    %% TODO: Hide the guts of a peer (e.g. connection handling) in a separate bgp_peer module.
-    {ok, ConnectionFsmPid} = bgp_connection_fsm:start_link(outgoing, {192, 168, 1, 105}),
-    ok = bgp_connection_fsm:manual_start(ConnectionFsmPid),
-    true = ets:insert(PeerTable, {RemoteAddress, void}),
-    {reply, ok, State};
+    {ok, PeerPid} = bgp_peer:start_link(RemoteAddress),
+    true = ets:insert(PeerTable, {RemoteAddress, PeerPid}),
+    {reply, {ok, PeerPid}, State};
 
 %%----------------------------------------------------------------------------------------------------------------------
 

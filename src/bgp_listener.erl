@@ -96,16 +96,18 @@ handle_call({stop}, _From, State) ->
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call({register_acceptable_address, RemoteAddress}, _From, State) ->
-    io:format("register_acceptable_address~n"),
+    io:format("register_acceptable_address: ~p~n", [RemoteAddress]),
     #bgp_listener_state{acceptable_address_table = AcceptableAddressTable} = State,
+    %% TODO: replace void
     ets:insert(AcceptableAddressTable, {RemoteAddress, void}),
     {reply, ok, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-handle_call({unregister_acceptable_address, _RemoteAddress}, _From, State) ->
-    io:format("unregister_acceptable_address~n"),
-    %% TODO:
+handle_call({unregister_acceptable_address, RemoteAddress}, _From, State) ->
+    io:format("unregister_acceptable_address: ~p~n", [RemoteAddress]),
+    #bgp_listener_state{acceptable_address_table = AcceptableAddressTable} = State,
+    ets:delete(AcceptableAddressTable, RemoteAddress),
     {reply, ok, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
