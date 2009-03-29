@@ -11,8 +11,6 @@
 %%% PERFORMANCE OF THIS SOFTWARE.
 %%%=====================================================================================================================
 
-%% Controlling process issues: the process that accepted the socket should become the reader?
-
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 

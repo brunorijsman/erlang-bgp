@@ -7,6 +7,7 @@
               bgp_messages,
               bgp_peer,
               bgp_receive_scheduler,
-              bgp_send_scheduler]}
+              bgp_send_scheduler,
+              rtr_rib]}
   ]
 }.
