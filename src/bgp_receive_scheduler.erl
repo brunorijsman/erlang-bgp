@@ -225,12 +225,17 @@ receive_message(ConnectionFsmPid, Socket) ->
         true ->
             ok
     end,
-    MessageData = case gen_tcp:recv(Socket, MessageLength - 19) of
-        {ok, Data} ->
-            Data;
-        {error, Reason} ->
-            throw({tcp_error, Reason})
-    end,
+    MessageData = if
+        MessageLength == 19 ->
+            <<>>;
+        MessageLength > 19 ->
+            case gen_tcp:recv(Socket, MessageLength - 19) of
+                {ok, Data} ->
+                    Data;
+                {error, Reason} ->
+                    throw({tcp_error, Reason})
+            end
+    end,   
     DecodeFunction(ConnectionFsmPid, MessageData).
 
 %%----------------------------------------------------------------------------------------------------------------------
