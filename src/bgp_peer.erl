@@ -20,6 +20,7 @@
 -behavior(gen_server).
 
 -include("bgp_peer.hrl").
+-include("rtr_constants.hrl").
 
 %% public API
 
@@ -57,14 +58,17 @@ set_remote_as(PeerPid, RemoteAs)
 %%----------------------------------------------------------------------------------------------------------------------
 
 init([RemoteAddress]) ->
-    State = #bgp_peer_state{remote_address = RemoteAddress}, 
+    Ipv4RibPid = rtr_rib_registry:bind(?RTR_ROUTING_INSTANCE_CORE, ?RTR_AFI_IPV4, ?RTR_SAFI_UNICAST),
+    State = #bgp_peer_state{remote_address = RemoteAddress, ipv4_rib_pid = Ipv4RibPid}, 
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 handle_call({stop}, _From, State) ->
+    rtr_rib_registry:unbind(?RTR_ROUTING_INSTANCE_CORE, ?RTR_AFI_IPV4, ?RTR_SAFI_UNICAST),
+    NewState = State#bgp_peer_state{ipv4_rib_pid = none}, 
     %% TODO: stop the connection(s)
-    {stop, normal, stopped, State};
+    {stop, normal, stopped, NewState};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 

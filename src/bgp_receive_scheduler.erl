@@ -514,7 +514,7 @@ decode_update(ConnectionFsmPid, Data) ->
     Update = #bgp_update{withdrawn_routes = WithdrawnRoutes, 
                           attributes = Attributes, 
                           advertised_routes = AdvertisedRoutes},
-    bgp_connection_fsm:receive_update(ConnectionFsmPid),      %% TODO: pass in the update message
+    bgp_connection_fsm:receive_update(ConnectionFsmPid, Update),
     Update.
 
 %%----------------------------------------------------------------------------------------------------------------------

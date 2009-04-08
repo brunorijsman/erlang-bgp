@@ -14,11 +14,19 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--record(rtr_rib_state, {
+-record(rtr_rib_table_key, {
     routing_instance,
     afi,
-    safi,
-    route_table
+    safi                           
+    }).
+
+-record(rtr_rib_table_value, {
+    ref_cnt,
+    rib_pid
+    }).
+
+-record(rtr_rib_registry_state, {
+    rib_table = none
     }).
 
 

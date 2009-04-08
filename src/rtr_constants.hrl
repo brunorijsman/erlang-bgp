@@ -14,11 +14,16 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--record(rtr_rib_state, {
-    routing_instance,
-    afi,
-    safi,
-    route_table
-    }).
+%% @doc Routing instances
+%%
+-define(RTR_ROUTING_INSTANCE_CORE, 0).
 
+%% @doc Address Family Identifiers (AFIs)
+%%
+-define(RTR_AFI_IPV4, 1).
+-define(RTR_AFI_IPV6, 2).
 
+%% @doc Subsequent Address Family Identifiers (SAFIs)
+%%
+-define(RTR_SAFI_UNICAST, 1).
+-define(RTR_SAFI_MULTICAST, 2).

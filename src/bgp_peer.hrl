@@ -27,6 +27,9 @@
     oper_state = down,                      %% up or down
     oper_state_reason = "Not initialized",
     in_cnx_fsm_pid = none,
-    out_cnx_fsm_pid = none
+    out_cnx_fsm_pid = none,
+                        
+    %% Per address family operational state
+    ipv4_rib_pid = none
     
     }).

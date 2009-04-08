@@ -38,10 +38,12 @@
 
 %% public API
 
--export([start_link/0,
+-export([start_link/3,
          stop/1,
          add_route/4,
-         remove_route/3]).
+         add_routes/4,
+         remove_route/3,
+         remove_routes/3]).
 
 %% gen_server callbacks
 
@@ -54,10 +56,11 @@
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-start_link() ->
-    %% TODO: Additional parameters: AFI/SAFI
+start_link(RoutingInstance, Afi, Safi) ->
     %% TODO: Encode AFI/SAFI in registered name
-    gen_server:start_link({local, rtr_rib}, ?MODULE, [], []).
+    %% Name = list_to_atom(lists:flatten(io_lib:format("bgp_cnx_fsm_~p_out", [RemoteAddress]))),
+    %% gen_fsm:start_link({local, Name}, ?MODULE, [Direction, RemoteAddress], [{debug, [trace, log, statistics]}]).
+    gen_server:start_link({local, rtr_rib}, ?MODULE, [], [RoutingInstance, Afi, Safi]).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -71,8 +74,18 @@ add_route(RibPid, Prefix, Owner, Attributes) ->
 
 %%----------------------------------------------------------------------------------------------------------------------
 
+add_routes(RibPid, PrefixList, Owner, Attributes) ->
+    gen_server:call(RibPid, {add_routes, PrefixList, Owner, Attributes}).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
 remove_route(RibPid, Prefix, Owner) ->
     gen_server:call(RibPid, {add_route, Prefix, Owner}).
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+remove_routes(RibPid, PrefixList, Owner) ->
+    gen_server:call(RibPid, {add_routes, PrefixList, Owner}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
@@ -91,12 +104,28 @@ handle_call({stop}, _From, State) ->
 
 handle_call({add_route, _Prefix, _Owner, _Attributes}, _From, State) ->
     %% TODO: implement this
+    io:format("ADD ROUTE~n"),       %% ###@@@
+    {reply, ok, State};
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+handle_call({add_routes, _PrefixList, _Owner, _Attributes}, _From, State) ->
+    %% TODO: implement this
+    io:format("ADD ROUTES~n"),       %% ###@@@
     {reply, ok, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 handle_call({remove_route, _Prefix, _Owner}, _From, State) ->
     %% TODO: implement this
+    io:format("REMOVE ROUTE~n"),       %% ###@@@
+    {reply, ok, State};
+
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+handle_call({remove_routes, _PrefixList, _Owner}, _From, State) ->
+    %% TODO: implement this
+    io:format("REMOVE ROUTES~n"),       %% ###@@@
     {reply, ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------

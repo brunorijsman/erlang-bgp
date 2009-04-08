@@ -59,7 +59,7 @@
          receive_notification_with_version_error/1,
          receive_notification/1,
          receive_keep_alive/1,
-         receive_update/1,
+         receive_update/2,
          receive_invalid_update/1]).
 
 %% gen_fsm callbacks
@@ -203,9 +203,9 @@ receive_keep_alive(Pid) ->
     io:format("API: receive_keep_alive~n"),
     gen_fsm:send_event(Pid, event_receive_keep_alive).
 
-receive_update(Pid) ->
+receive_update(Pid, Update) ->
     io:format("API: receive_update~n"),
-    gen_fsm:send_event(Pid, event_receive_update).
+    gen_fsm:send_event(Pid, {event_receive_update, Update}).
 
 receive_invalid_update(Pid) ->
     io:format("API: receive_invalid_update~n"),
@@ -567,6 +567,18 @@ action_delete_all_routes_associated_with_connection(State) ->
 action_complete_bgp_initialization(State) ->
     io:format("action_complete_bgp_initialization (TODO:)~n"),
     % TODO: - completes BGP initialization. Not sure what that means, if anything.
+    State.
+
+%%----------------------------------------------------------------------------------------------------------------------
+
+action_process_update(State, Update) ->
+    #bgp_update{withdrawn_routes = WithdrawnRoutes, 
+                attributes = Attributes, 
+                advertised_routes = AdvertisedRoutes} = Update,
+    RibPid = 1,     %% ###@@@
+    Owner = 2,      %% ###@@@
+    rtr_rib:remove_routes(RibPid, Owner, WithdrawnRoutes),
+    rtr_rib:add_routes(RibPid, Owner, AdvertisedRoutes, Attributes),
     State.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -1346,11 +1358,11 @@ state_established(Event, State)
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-state_established(Event, State)
+state_established({Event, Update}, State)
   when (Event == event_receive_update) ->
-    % TODO: processes the message,
-    State1 = action_start_hold_timer(State),
-    {next_state, state_established, State1};
+    State1 = action_process_update(State, Update),
+    State2 = action_start_hold_timer(State1),
+    {next_state, state_established, State2};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 

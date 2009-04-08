@@ -8,6 +8,7 @@
               bgp_peer,
               bgp_receive_scheduler,
               bgp_send_scheduler,
-              rtr_rib]}
+              rtr_rib,
+              rtr_rib_registry]}
   ]
 }.
