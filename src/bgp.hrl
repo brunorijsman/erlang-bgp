@@ -15,5 +15,7 @@
 %% @copyright 2009 Bruno Rijsman
 
 -record(bgp_state, {
-    peer_table = none
+    peer_table = none,
+    %% TODO: The set of RIBs to which BGP binds should depend on the configured address families.
+    ipv4_rib_pid = none
     }).

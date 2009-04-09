@@ -22,7 +22,6 @@
 -include("rtr_rib.hrl").
 
 %% TODO: Desired features of RIB (Routing Information Base) module:
-%% - Support multiple tables (e.g. different AFI/SAFIs, tunnels, etc.)
 %% - Provide APIs to query table (find-exact-match, find-best-match, find-next, etc.)
 %% - Add support for next-hop interface and next-hop interface
 %% - Allow clients to bind and unbind to a RIB.
@@ -57,10 +56,9 @@
 %%----------------------------------------------------------------------------------------------------------------------
 
 start_link(RoutingInstance, Afi, Safi) ->
-    %% TODO: Encode AFI/SAFI in registered name
-    %% Name = list_to_atom(lists:flatten(io_lib:format("bgp_cnx_fsm_~p_out", [RemoteAddress]))),
-    %% gen_fsm:start_link({local, Name}, ?MODULE, [Direction, RemoteAddress], [{debug, [trace, log, statistics]}]).
-    gen_server:start_link({local, rtr_rib}, ?MODULE, [], [RoutingInstance, Afi, Safi]).
+    ProcessNameString = io_lib:format("rtr_rib_ri_~p_afi_~p_saf_~p", [RoutingInstance, Afi, Safi]),
+    ProcessName = list_to_atom(lists:flatten(ProcessNameString)),
+    gen_server:start_link({local, ProcessName}, ?MODULE, [], [RoutingInstance, Afi, Safi]).
 
 %%----------------------------------------------------------------------------------------------------------------------
 

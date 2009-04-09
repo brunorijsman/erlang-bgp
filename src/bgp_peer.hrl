@@ -30,6 +30,8 @@
     out_cnx_fsm_pid = none,
                         
     %% Per address family operational state
+    %% TODO: The set of RIBs to which the peer binds should depend on the address families
+    %% which are configured for the BGP peer.
     ipv4_rib_pid = none
     
     }).

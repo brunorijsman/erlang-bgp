@@ -27,7 +27,7 @@
          stop/0,
          bind/3,
          unbind/3]).
-
+ 
 %% gen_server callbacks
 
 -export([init/1,
@@ -55,18 +55,20 @@ bind(RoutingInstance, Afi, Safi) ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 unbind(RoutingInstance, Afi, Safi) ->
+    io:format("****~n"), %% @@@
     gen_server:call(rtr_rib_registry, {unbind, RoutingInstance, Afi, Safi}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 init([]) ->
-    RibTable = ets:new(rtr_rib_table, []),
+    RibTable = ets:new(rtr_ribs, []),
     State = #rtr_rib_registry_state{rib_table = RibTable},
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 handle_call({stop}, _From, State) ->
+    %% TODO: make sure all RIB bindings have been released
     #rtr_rib_registry_state{rib_table = RibTable} = State,
     ets:delete(RibTable),
     NewState = #rtr_rib_registry_state{rib_table = none},
@@ -79,7 +81,7 @@ handle_call({bind, RoutingInstance, Afi, Safi}, _From, State) ->
     Key = #rtr_rib_table_key{routing_instance = RoutingInstance, afi = Afi, safi = Safi},
     NewValue = case ets:lookup(RibTable, Key) of
         [] ->
-            RibPid = rtr_rib:start_link(RoutingInstance, Afi, Safi),
+            {ok, RibPid} = rtr_rib:start_link(RoutingInstance, Afi, Safi),
             #rtr_rib_table_value{ref_cnt = 1, rib_pid = RibPid};  
         [Value] ->
             #rtr_rib_table_value{ref_cnt = RefCnt} = Value,
@@ -93,7 +95,7 @@ handle_call({bind, RoutingInstance, Afi, Safi}, _From, State) ->
 handle_call({unbind, RoutingInstance, Afi, Safi}, _From, State) ->
     #rtr_rib_registry_state{rib_table = RibTable} = State,
     Key = #rtr_rib_table_key{routing_instance = RoutingInstance, afi = Afi, safi = Safi},
-    [Value] = ets:lookup(RibTable, Key),
+    [{Key, Value}] = ets:lookup(RibTable, Key),
     #rtr_rib_table_value{ref_cnt = RefCnt, rib_pid = RibPid} = Value,
     if
         RefCnt == 0 ->

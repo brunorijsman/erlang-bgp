@@ -21,6 +21,7 @@
 
 -include("bgp.hrl").
 -include("bgp_constants.hrl").
+-include("rtr_constants.hrl").
 
 %% public API
 
@@ -71,9 +72,11 @@ test() ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 init([]) ->
-    PeerTable = ets:new(peers, []),
+    PeerTable = ets:new(bgp_peers, []),
+    rtr_rib_registry:start_link(),
+    Ipv4RibPid = rtr_rib_registry:bind(?RTR_ROUTING_INSTANCE_CORE, ?RTR_AFI_IPV4, ?RTR_SAFI_UNICAST),
     bgp_listener:start_link(),
-    State = #bgp_state{peer_table = PeerTable},
+    State = #bgp_state{peer_table = PeerTable, ipv4_rib_pid = Ipv4RibPid},
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
@@ -81,7 +84,9 @@ init([]) ->
 handle_call({stop}, _From, State) ->
     #bgp_state{peer_table = PeerTable} = State,
     ets:delete(PeerTable),
-    NewState = #bgp_state{peer_table = none},
+    rtr_rib_registry:unbind(?RTR_ROUTING_INSTANCE_CORE, ?RTR_AFI_IPV4, ?RTR_SAFI_UNICAST),
+    rtr_rib_registry:stop(),
+    NewState = #bgp_state{peer_table = none, ipv4_rib_pid = none},
     {stop, normal, stopped, NewState};
 
 %%----------------------------------------------------------------------------------------------------------------------

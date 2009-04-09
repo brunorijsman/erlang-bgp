@@ -73,7 +73,7 @@ incoming_connection(Socket) ->
 %%----------------------------------------------------------------------------------------------------------------------
 
 init([]) ->
-    AcceptableAddressTable = ets:new(?MODULE, []),
+    AcceptableAddressTable = ets:new(bgp_acceptable_addresses, []),
     Options = [binary, {packet, raw}, {active, false}, {reuseaddr, true}],
     {ok, ListenSocket} = gen_tcp:listen(?BGP_TCP_LISTEN_PORT, Options),       %% TODO: handle errors (e.g. eaccess => must run as root)
     AcceptLoopPid = spawn_link(fun () -> accept_loop(ListenSocket) end),
