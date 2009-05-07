@@ -577,8 +577,8 @@ action_process_update(State, Update) ->
                 advertised_routes = AdvertisedRoutes} = Update,
     RibPid = 1,     %% ###@@@
     Owner = 2,      %% ###@@@
-    rtr_rib:remove_routes(RibPid, Owner, WithdrawnRoutes),
-    rtr_rib:add_routes(RibPid, Owner, AdvertisedRoutes, Attributes),
+    rtr_rib:remove_routes(RibPid, WithdrawnRoutes, Owner),
+    rtr_rib:add_routes(RibPid, AdvertisedRoutes, Owner, Attributes),
     State.
 
 %%----------------------------------------------------------------------------------------------------------------------

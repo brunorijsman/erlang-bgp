@@ -79,15 +79,14 @@ handle_call({stop}, _From, State) ->
 handle_call({bind, RoutingInstance, Afi, Safi}, _From, State) ->
     #rtr_rib_registry_state{rib_table = RibTable} = State,
     Key = #rtr_rib_table_key{routing_instance = RoutingInstance, afi = Afi, safi = Safi},
-    NewValue = case ets:lookup(RibTable, Key) of
+    NewRefCnt = case ets:lookup(RibTable, Key) of
         [] ->
             {ok, RibPid} = rtr_rib:start_link(RoutingInstance, Afi, Safi),
-            #rtr_rib_table_value{ref_cnt = 1, rib_pid = RibPid};  
-        [Value] ->
-            #rtr_rib_table_value{ref_cnt = RefCnt} = Value,
-            Value#rtr_rib_table_value{ref_cnt = RefCnt + 1}
+            1;  
+        [{Key, RefCnt, RibPid}] ->
+            RefCnt + 1
     end,
-    ets:insert(RibTable, {Key, NewValue}),
+    ets:insert(RibTable, {Key, NewRefCnt, RibPid}),
     {reply, ok, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -95,15 +94,13 @@ handle_call({bind, RoutingInstance, Afi, Safi}, _From, State) ->
 handle_call({unbind, RoutingInstance, Afi, Safi}, _From, State) ->
     #rtr_rib_registry_state{rib_table = RibTable} = State,
     Key = #rtr_rib_table_key{routing_instance = RoutingInstance, afi = Afi, safi = Safi},
-    [{Key, Value}] = ets:lookup(RibTable, Key),
-    #rtr_rib_table_value{ref_cnt = RefCnt, rib_pid = RibPid} = Value,
+    [{Key, RibPid, RefCnt}] = ets:lookup(RibTable, Key),
     if
         RefCnt == 0 ->
             rtr_rib:stop(RibPid),
             ets:delete(RibTable, Key);
         true ->
-            NewValue = Value#rtr_rib_table_value{ref_cnt = RefCnt + 1},
-            ets:insert(RibTable, {Key, NewValue})
+            ets:insert(RibTable, {Key, RibPid, RefCnt + 1})
     end,
     {reply, ok, State}.
 

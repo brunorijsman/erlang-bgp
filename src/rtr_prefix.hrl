@@ -14,14 +14,7 @@
 %% @author Bruno Rijsman
 %% @copyright 2009 Bruno Rijsman
 
--record(rtr_rib_registry_state, {
-    rib_table = none
+-record(rtr_prefix, {
+    bytes,                  %% List of bytes; irrelevant bits must be zero
+    bit_length              %% Relevant length in bits
     }).
-
--record(rtr_rib_table_key, {
-    routing_instance,
-    afi,
-    safi                           
-    }).
-
-

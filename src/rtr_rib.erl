@@ -56,46 +56,54 @@
 %%----------------------------------------------------------------------------------------------------------------------
 
 start_link(RoutingInstance, Afi, Safi) ->
-    ProcessNameString = io_lib:format("rtr_rib_ri_~p_afi_~p_saf_~p", [RoutingInstance, Afi, Safi]),
+    ProcessNameString = io_lib:format("rtr_rib_inst_~p_afi_~p_safi_~p", [RoutingInstance, Afi, Safi]),
     ProcessName = list_to_atom(lists:flatten(ProcessNameString)),
-    gen_server:start_link({local, ProcessName}, ?MODULE, [], [RoutingInstance, Afi, Safi]).
+    gen_server:start_link({local, ProcessName}, ?MODULE, [RoutingInstance, Afi, Safi], []).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-stop(RibPid) ->
+stop(RibPid) 
+  when is_pid(RibPid) ->
     gen_server:call(RibPid, {stop}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-add_route(RibPid, Prefix, Owner, Attributes) ->
+add_route(RibPid, Prefix, Owner, Attributes) 
+  when is_pid(RibPid) ->
     gen_server:call(RibPid, {add_route, Prefix, Owner, Attributes}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-add_routes(RibPid, PrefixList, Owner, Attributes) ->
+add_routes(RibPid, PrefixList, Owner, Attributes)
+  when is_pid(RibPid) ->
+    io:format("*** ADD ROUTES ***~n"),  %%@@@
     gen_server:call(RibPid, {add_routes, PrefixList, Owner, Attributes}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-remove_route(RibPid, Prefix, Owner) ->
+remove_route(RibPid, Prefix, Owner)
+  when is_pid(RibPid) ->
     gen_server:call(RibPid, {add_route, Prefix, Owner}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-remove_routes(RibPid, PrefixList, Owner) ->
+remove_routes(RibPid, PrefixList, Owner)
+  when is_pid(RibPid) ->
     gen_server:call(RibPid, {add_routes, PrefixList, Owner}).
 
 %%----------------------------------------------------------------------------------------------------------------------
 
-init([]) ->
-    %% TODO: implement this
-    State = #rtr_rib_state{},
+init([RoutingInstance, Afi, Safi]) ->
+    TableNameString = io_lib:format("routes_inst_~p_afi_~p_safi_~p", [RoutingInstance, Afi, Safi]),
+    TableName = list_to_atom(lists:flatten(TableNameString)),
+    RouteTable = ets:new(TableName, []),
+    State = #rtr_rib_state{routing_instance = RoutingInstance, afi = Afi, safi = Safi, route_table = RouteTable},
     {ok, State}.
 
 %%----------------------------------------------------------------------------------------------------------------------
 
 handle_call({stop}, _From, State) ->
-    %% TODO: implement this
+    ets:delete(State#rtr_rib_state.route_table),
     {stop, normal, stopped, State};
 
 %%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
